@@ -3,8 +3,13 @@ const resultDisplay = document.querySelector("#result-display");
 
 const valueButtons = document.querySelectorAll("[data-value]");
 const actionButtons = document.querySelectorAll("[data-action]");
+const functionButtons = document.querySelectorAll("[data-function]");
+const constantButtons = document.querySelectorAll("[data-constant]");
+const modeButtons = document.querySelectorAll("[data-mode]");
 
 let expression = "";
+let angleMode = "rad";
+
 
 /*
  * Display
@@ -14,7 +19,8 @@ function formatExpression(value) {
     return value
         .replaceAll("*", "×")
         .replaceAll("/", "÷")
-        .replaceAll("-", "−");
+        .replaceAll("-", "−")
+        .replace(/\bpi\b/g, "π");
 }
 
 function updateDisplay() {
@@ -27,12 +33,41 @@ function updateDisplay() {
     }
 }
 
+function updateAngleModeDisplay() {
+    modeButtons.forEach((button) => {
+        const isActive = button.dataset.mode === angleMode;
+        button.classList.toggle("active", isActive);
+    });
+}
+
+
 /*
  * Input state
  */
 
 function appendValue(value) {
     expression += value;
+    updateDisplay();
+}
+
+function appendConstant(constant) {
+    const symbolicValue = constant === "pi" ? "pi" : "e";
+
+    const lastCharacter = expression.at(-1);
+
+    const needsMultiplication =
+        expression.length > 0 &&
+        (
+            (lastCharacter >= "0" && lastCharacter <= "9") ||
+            lastCharacter === ")" ||
+            lastCharacter === "."
+        );
+
+    if (needsMultiplication) {
+        expression += "*";
+    }
+
+    expression += symbolicValue;
     updateDisplay();
 }
 
@@ -43,30 +78,36 @@ function clearExpression() {
 }
 
 function removeLastCharacter() {
-    expression = expression.slice(0, -1);
+    if (expression.endsWith("pi")) {
+        expression = expression.slice(0, -2);
+    } else {
+        expression = expression.slice(0, -1);
+    }
+
     updateDisplay();
 }
 
+
 /*
  * Tokenization
- *
- * Converts:
- * "12.5+(3*4)"
- *
- * into:
- * ["12.5", "+", "(", "3", "*", "4", ")"]
  */
 
 function tokenize(input) {
     const tokens = [];
+
     let currentNumber = "";
+    let currentIdentifier = "";
 
     function finishNumber() {
         if (currentNumber === "") {
             return;
         }
 
-        if (currentNumber === ".") {
+        if (
+            currentNumber === "." ||
+            currentNumber === "-" ||
+            currentNumber === "-."
+        ) {
             throw new Error("Invalid decimal number.");
         }
 
@@ -74,29 +115,107 @@ function tokenize(input) {
         currentNumber = "";
     }
 
-    for (const character of input) {
-        if (character >= "0" && character <= "9") {
+    function finishIdentifier() {
+        if (currentIdentifier === "") {
+            return;
+        }
+
+        if (currentIdentifier !== "pi" && currentIdentifier !== "e") {
+            throw new Error(
+                `Unsupported identifier: ${currentIdentifier}`
+            );
+        }
+
+        tokens.push(currentIdentifier);
+        currentIdentifier = "";
+    }
+
+    function previousTokenAllowsUnaryOperator() {
+        if (tokens.length === 0) {
+            return true;
+        }
+
+        const previous = tokens.at(-1);
+
+        return ["+", "-", "*", "/", "^", "("].includes(previous);
+    }
+
+    for (let index = 0; index < input.length; index += 1) {
+        const character = input[index];
+
+        if (
+            character >= "0" &&
+            character <= "9"
+        ) {
+            finishIdentifier();
             currentNumber += character;
             continue;
         }
 
         if (character === ".") {
+            finishIdentifier();
+
             if (currentNumber.includes(".")) {
-                throw new Error("A number cannot contain multiple decimal points.");
+                throw new Error(
+                    "A number cannot contain multiple decimal points."
+                );
             }
 
             currentNumber += character;
             continue;
         }
 
-        if ("+-*/^()".includes(character)) {
+        if (
+            (character >= "a" && character <= "z") ||
+            (character >= "A" && character <= "Z")
+        ) {
             finishNumber();
+            currentIdentifier += character.toLowerCase();
+            continue;
+        }
+
+        if (character === "-") {
+            finishIdentifier();
+
+            if (
+                currentNumber === "" &&
+                previousTokenAllowsUnaryOperator()
+            ) {
+                currentNumber = "-";
+                continue;
+            }
+
+            finishNumber();
+            tokens.push(character);
+            continue;
+        }
+
+        if (character === "+") {
+            finishIdentifier();
+
+            if (
+                currentNumber === "" &&
+                previousTokenAllowsUnaryOperator()
+            ) {
+                continue;
+            }
+
+            finishNumber();
+            tokens.push(character);
+            continue;
+        }
+
+        if ("*/^()".includes(character)) {
+            finishNumber();
+            finishIdentifier();
+
             tokens.push(character);
             continue;
         }
 
         if (character === " ") {
             finishNumber();
+            finishIdentifier();
             continue;
         }
 
@@ -104,18 +223,14 @@ function tokenize(input) {
     }
 
     finishNumber();
+    finishIdentifier();
 
     return tokens;
 }
 
+
 /*
- * Infix → Reverse Polish Notation
- *
- * Example:
- * 2 + 3 * 5
- *
- * becomes:
- * 2 3 5 * +
+ * Infix expression → postfix expression
  */
 
 function toPostfix(tokens) {
@@ -133,7 +248,11 @@ function toPostfix(tokens) {
     const rightAssociative = new Set(["^"]);
 
     for (const token of tokens) {
-        if (!Number.isNaN(Number(token))) {
+        if (
+            !Number.isNaN(Number(token)) ||
+            token === "pi" ||
+            token === "e"
+        ) {
             output.push(token);
             continue;
         }
@@ -204,16 +323,33 @@ function toPostfix(tokens) {
     return output;
 }
 
+
 /*
- * Evaluates the postfix expression.
+ * Postfix evaluation
  */
+
+function tokenToNumber(token) {
+    if (token === "pi") {
+        return Math.PI;
+    }
+
+    if (token === "e") {
+        return Math.E;
+    }
+
+    return Number(token);
+}
 
 function evaluatePostfix(tokens) {
     const stack = [];
 
     for (const token of tokens) {
-        if (!Number.isNaN(Number(token))) {
-            stack.push(Number(token));
+        if (
+            !Number.isNaN(Number(token)) ||
+            token === "pi" ||
+            token === "e"
+        ) {
+            stack.push(tokenToNumber(token));
             continue;
         }
 
@@ -241,7 +377,9 @@ function evaluatePostfix(tokens) {
 
             case "/":
                 if (rightOperand === 0) {
-                    throw new Error("Division by zero is undefined.");
+                    throw new Error(
+                        "Division by zero is undefined."
+                    );
                 }
 
                 result = leftOperand / rightOperand;
@@ -272,8 +410,9 @@ function evaluateExpression(input) {
     return evaluatePostfix(postfixExpression);
 }
 
+
 /*
- * Calculation
+ * Result formatting
  */
 
 function formatResult(value) {
@@ -281,8 +420,24 @@ function formatResult(value) {
         throw new Error("The result is not a finite number.");
     }
 
-    return Number.parseFloat(value.toPrecision(12)).toString();
+    return Number
+        .parseFloat(value.toPrecision(12))
+        .toString();
 }
+
+function setResult(value) {
+    const formattedValue = formatResult(value);
+
+    resultDisplay.textContent = formattedValue;
+    expression = formattedValue;
+
+    updateDisplay();
+}
+
+
+/*
+ * Arithmetic calculation
+ */
 
 function calculateExpression() {
     if (!expression) {
@@ -298,6 +453,128 @@ function calculateExpression() {
         console.error(error.message);
     }
 }
+
+
+/*
+ * Scientific functions
+ */
+
+function degreesToRadians(value) {
+    return value * Math.PI / 180;
+}
+
+function angleInput(value) {
+    if (angleMode === "deg") {
+        return degreesToRadians(value);
+    }
+
+    return value;
+}
+
+function applyScientificFunction(functionName) {
+    if (!expression) {
+        return;
+    }
+
+    try {
+        const value = evaluateExpression(expression);
+
+        let result;
+
+        switch (functionName) {
+            case "sin":
+                result = Math.sin(angleInput(value));
+                break;
+
+            case "cos":
+                result = Math.cos(angleInput(value));
+                break;
+
+            case "tan":
+                result = Math.tan(angleInput(value));
+                break;
+
+            case "sinh":
+                result = Math.sinh(value);
+                break;
+
+            case "cosh":
+                result = Math.cosh(value);
+                break;
+
+            case "tanh":
+                result = Math.tanh(value);
+                break;
+
+            case "log":
+                if (value <= 0) {
+                    throw new Error(
+                        "The logarithm requires a positive argument."
+                    );
+                }
+
+                result = Math.log10(value);
+                break;
+
+            case "ln":
+                if (value <= 0) {
+                    throw new Error(
+                        "The natural logarithm requires a positive argument."
+                    );
+                }
+
+                result = Math.log(value);
+                break;
+
+            case "sqrt":
+                if (value < 0) {
+                    throw new Error(
+                        "The real square root requires a non-negative argument."
+                    );
+                }
+
+                result = Math.sqrt(value);
+                break;
+
+            case "square":
+                result = value ** 2;
+                break;
+
+            case "exp":
+                result = Math.exp(value);
+                break;
+
+            case "percent":
+                result = value / 100;
+                break;
+
+            case "inverse":
+                if (value === 0) {
+                    throw new Error(
+                        "The multiplicative inverse of zero is undefined."
+                    );
+                }
+
+                result = 1 / value;
+                break;
+
+            case "sign":
+                result = -value;
+                break;
+
+            default:
+                throw new Error(
+                    `Unsupported scientific function: ${functionName}`
+                );
+        }
+
+        setResult(result);
+    } catch (error) {
+        resultDisplay.textContent = "Error";
+        console.error(error.message);
+    }
+}
+
 
 /*
  * Button events
@@ -315,10 +592,12 @@ actionButtons.forEach((button) => {
 
         if (action === "clear") {
             clearExpression();
+            return;
         }
 
         if (action === "backspace") {
             removeLastCharacter();
+            return;
         }
 
         if (action === "calculate") {
@@ -326,6 +605,26 @@ actionButtons.forEach((button) => {
         }
     });
 });
+
+functionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+        applyScientificFunction(button.dataset.function);
+    });
+});
+
+constantButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+        appendConstant(button.dataset.constant);
+    });
+});
+
+modeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+        angleMode = button.dataset.mode;
+        updateAngleModeDisplay();
+    });
+});
+
 
 /*
  * Keyboard events
@@ -365,4 +664,10 @@ document.addEventListener("keydown", (event) => {
     }
 });
 
+
+/*
+ * Initial state
+ */
+
 updateDisplay();
+updateAngleModeDisplay();
