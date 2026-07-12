@@ -70,6 +70,8 @@ button {
     flex-direction: column;
     justify-content: center;
     align-items: center;
+
+    transform: translateY(-40px);
 }
 
 .calculator {
